@@ -28,6 +28,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/list.h>
 #include <ipxe/umalloc.h>
 #include <ipxe/uri.h>
+#include <ipxe/activity.h>
 #include <ipxe/image.h>
 
 /** @file
@@ -261,6 +262,13 @@ int image_exec ( struct image *image ) {
 	 * automatically freeing itself.
 	 */
 	image_get ( image );
+
+	/**
+	 * Wait for possible pending activities before possible leaves gPXE
+	 * at later image execution.
+	 * Currently only TCP close event implemented it.
+	 */
+	activity_wait( ACTIVITY_TIMEOUT );
 
 	/* Try executing the image */
 	if ( ( rc = image->type->exec ( image ) ) != 0 ) {

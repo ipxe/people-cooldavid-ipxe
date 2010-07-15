@@ -20,6 +20,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/shell.h>
 #include <ipxe/shell_banner.h>
 #include <ipxe/image.h>
+#include <ipxe/activity.h>
 #include <usr/autoboot.h>
 #include <config/general.h>
 
@@ -85,6 +86,7 @@ __asmcall int main ( void ) {
 			shell();
 	}
 
+	activity_wait ( ACTIVITY_TIMEOUT );
 	shutdown ( SHUTDOWN_EXIT | shutdown_exit_flags );
 
 	return 0;

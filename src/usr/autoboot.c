@@ -27,6 +27,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/image.h>
 #include <ipxe/sanboot.h>
 #include <ipxe/uri.h>
+#include <ipxe/activity.h>
 #include <usr/ifmgmt.h>
 #include <usr/route.h>
 #include <usr/dhcpmgmt.h>
@@ -232,6 +233,11 @@ void autoboot ( void ) {
 	for_each_netdev ( netdev ) {
 		if ( netdev == boot_netdev )
 			continue;
+		/**
+		 * Wait for possible pending activities.
+		 * Currently only TCP close event implemented it.
+		 */
+		activity_wait( ACTIVITY_TIMEOUT );
 		close_all_netdevs();
 		netboot ( netdev );
 	}

@@ -7,6 +7,7 @@
 #include <ipxe/timer.h>
 #include <ipxe/iobuf.h>
 #include <ipxe/malloc.h>
+#include <ipxe/activity.h>
 #include <ipxe/retry.h>
 #include <ipxe/refcnt.h>
 #include <ipxe/xfer.h>
@@ -97,6 +98,8 @@ enum tcp_flags {
 	TCP_TS_ENABLED = 0x0002,
 	/** TCP acknowledgement is pending */
 	TCP_ACK_PENDING = 0x0004,
+	/** Activity started **/
+	TCP_ACT_STARTED = 0x0008,
 };
 
 /** TCP internal header
@@ -171,6 +174,18 @@ tcp_dump_state ( struct tcp_connection *tcp ) {
 		DBGC ( tcp, "TCP %p transitioned from %s to %s\n", tcp,
 		       tcp_state ( tcp->prev_tcp_state ),
 		       tcp_state ( tcp->tcp_state ) );
+
+		if ( TCP_CLOSE_INPROGRESS ( tcp->tcp_state ) &&
+		     ! ( tcp->flags & TCP_ACT_STARTED ) ) {
+			activity_start();
+			tcp->flags |= TCP_ACT_STARTED;
+		}
+
+		if ( TCP_CLOSED_GRACEFULLY( tcp->tcp_state ) &&
+		     ( tcp->flags & TCP_ACT_STARTED ) ) {
+			activity_stop();
+			tcp->flags &= ~TCP_ACT_STARTED;
+		}
 	}
 	tcp->prev_tcp_state = tcp->tcp_state;
 }

@@ -278,6 +278,19 @@ struct tcp_options {
 			TCP_STATE_RCVD ( TCP_FIN ) ) )			    \
 	  == ( TCP_STATE_ACKED ( TCP_FIN ) | TCP_STATE_RCVD ( TCP_FIN ) ) )
 
+/** TCP close activities in progress
+ *
+ * TCP is in a state that connection is trying to close, and should
+ * wait for the state to TIME_WAIT or CLOSED.
+ * This is used for preventing remote peer dangling TCP state.
+ */
+#define TCP_CLOSE_INPROGRESS(state)					    \
+	( (state) == TCP_CLOSE_WAIT ||					    \
+	  (state) == TCP_LAST_ACK   ||					    \
+	  (state) == TCP_CLOSING    ||					    \
+	  (state) == TCP_FIN_WAIT_1 ||					    \
+	  (state) == TCP_FIN_WAIT_2 )
+
 /** @} */
 
 /** Mask for TCP header length field */
