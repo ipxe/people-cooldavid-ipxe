@@ -861,18 +861,17 @@ static int tcp_rx_ack ( struct tcp_connection *tcp, uint32_t ack,
  *
  * This function takes ownership of the I/O buffer.
  */
-static int tcp_rx_data ( struct tcp_connection *tcp, uint32_t seq,
+static struct io_buffer* tcp_rx_data ( struct tcp_connection *tcp, uint32_t seq,
 			 struct io_buffer *iobuf ) {
 	uint32_t already_rcvd;
 	uint32_t len;
-	int rc;
 
 	/* Ignore duplicate or out-of-order data */
 	already_rcvd = ( tcp->rcv_ack - seq );
 	len = iob_len ( iobuf );
 	if ( already_rcvd >= len ) {
 		free_iob ( iobuf );
-		return 0;
+		return NULL;
 	}
 	iob_pull ( iobuf, already_rcvd );
 	len -= already_rcvd;
@@ -880,14 +879,7 @@ static int tcp_rx_data ( struct tcp_connection *tcp, uint32_t seq,
 	/* Acknowledge new data */
 	tcp_rx_seq ( tcp, len );
 
-	/* Deliver data to application */
-	if ( ( rc = xfer_deliver_iob ( &tcp->xfer, iobuf ) ) != 0 ) {
-		DBGC ( tcp, "TCP %p could not deliver %08x..%08x: %s\n",
-		       tcp, seq, ( seq + len ), strerror ( rc ) );
-		return rc;
-	}
-
-	return 0;
+	return iobuf;
 }
 
 /**
@@ -908,9 +900,6 @@ static int tcp_rx_fin ( struct tcp_connection *tcp, uint32_t seq ) {
 
 	/* Mark FIN as received */
 	tcp->tcp_state |= TCP_STATE_RCVD ( TCP_FIN );
-
-	/* Close connection */
-	tcp_close ( tcp, 0 );
 
 	return 0;
 }
@@ -1008,6 +997,7 @@ static void tcp_process_rx_queue ( struct tcp_connection *tcp ) {
 	uint32_t seq;
 	unsigned int flags;
 	size_t len;
+	int rc;
 
 	/* Process all applicable received buffers.  Note that we
 	 * cannot use list_for_each_entry() to iterate over the RX
@@ -1031,7 +1021,7 @@ static void tcp_process_rx_queue ( struct tcp_connection *tcp ) {
 		len = iob_len ( iobuf );
 
 		/* Handle new data, if any */
-		tcp_rx_data ( tcp, seq, iob_disown ( iobuf ) );
+		iobuf = tcp_rx_data ( tcp, seq, iobuf );
 		seq += len;
 
 		/* Handle FIN, if present */
@@ -1039,6 +1029,20 @@ static void tcp_process_rx_queue ( struct tcp_connection *tcp ) {
 			tcp_rx_fin ( tcp, seq );
 			seq++;
 		}
+
+		/* Deliver data to application, if any */
+		if ( iobuf &&
+		     ( rc = xfer_deliver_iob ( &tcp->xfer,
+					       iob_disown ( iobuf ) ) ) != 0 ) {
+			DBGC ( tcp, "TCP %p could not deliver %08x..%08x: %s\n",
+			       tcp, ( seq - len - ( flags & TCP_FIN ) ? 1 : 0 ),
+			       seq, strerror ( rc ) );
+		}
+	}
+
+	if ( tcp->tcp_state & TCP_STATE_RCVD ( TCP_FIN ) ) {
+		/* Close connection */
+		tcp_close ( tcp, 0 );
 	}
 }
 
