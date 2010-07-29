@@ -150,9 +150,11 @@ tcp_state ( int state ) {
 	case TCP_ESTABLISHED:		return "ESTABLISHED";
 	case TCP_FIN_WAIT_1:		return "FIN_WAIT_1";
 	case TCP_FIN_WAIT_2:		return "FIN_WAIT_2";
-	case TCP_CLOSING_OR_LAST_ACK:	return "CLOSING/LAST_ACK";
+	case TCP_CLOSING:		return "CLOSING";
+	case TCP_LAST_ACK:		return "LAST_ACK";
 	case TCP_TIME_WAIT:		return "TIME_WAIT";
 	case TCP_CLOSE_WAIT:		return "CLOSE_WAIT";
+	case TCP_PASV_CLOSED:		return "PASV_CLOSED";
 	default:			return "INVALID";
 	}
 }
@@ -577,7 +579,8 @@ static void tcp_expired ( struct retry_timer *timer, int over ) {
 		 ( tcp->tcp_state == TCP_ESTABLISHED ) ||
 		 ( tcp->tcp_state == TCP_FIN_WAIT_1 ) ||
 		 ( tcp->tcp_state == TCP_CLOSE_WAIT ) ||
-		 ( tcp->tcp_state == TCP_CLOSING_OR_LAST_ACK ) );
+		 ( tcp->tcp_state == TCP_CLOSING ) ||
+		 ( tcp->tcp_state == TCP_LAST_ACK ) );
 
 	if ( over ) {
 		/* If we have finally timed out and given up,
@@ -901,6 +904,12 @@ static int tcp_rx_fin ( struct tcp_connection *tcp, uint32_t seq ) {
 	/* Mark FIN as received */
 	tcp->tcp_state |= TCP_STATE_RCVD ( TCP_FIN );
 
+	/* Mark as passive close if we receive FIN privier than sending FIN */
+	if ( !( tcp->tcp_state & TCP_FLAGS_SENT ( TCP_FIN ) ) ) {
+		tcp->tcp_state |= TCP_PASV_CLOSE;
+		DBGC ( tcp, "TCP %p passive closing.\n", tcp );
+	}
+
 	return 0;
 }
 
@@ -1171,10 +1180,17 @@ static int tcp_rx ( struct io_buffer *iobuf,
 	/* Send out any pending data */
 	tcp_xmit ( tcp );
 
-	/* If this packet was the last we expect to receive, set up
-	 * timer to expire and cause the connection to be freed.
+	/* If this packet was the last we expect to receive:
+	 * For passive close:
+	 * 	Free the connection immediately.
+	 * For active close:
+	 *	Set up timer to expire and cause the connection to be freed.
 	 */
-	if ( TCP_CLOSED_GRACEFULLY ( tcp->tcp_state ) ) {
+	if ( tcp->tcp_state == TCP_PASV_CLOSED ) {
+		tcp->tcp_state = TCP_CLOSED;
+		tcp_dump_state ( tcp );
+		tcp_close ( tcp, 0 );
+	} else if ( TCP_CLOSED_GRACEFULLY ( tcp->tcp_state ) ) {
 		stop_timer ( &tcp->wait );
 		start_timer_fixed ( &tcp->wait, ( 2 * TCP_MSL ) );
 	}

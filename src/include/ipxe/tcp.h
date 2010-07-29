@@ -132,6 +132,12 @@ struct tcp_options {
  */
 #define TCP_CLOSED TCP_RST
 
+/** TCP Passive Close
+ *
+ * Received FIN while FIN not sent
+ */
+#define TCP_PASV_CLOSE	0x80000000
+
 /** LISTEN
  *
  * Not currently used as a state; we have no support for listening
@@ -187,19 +193,30 @@ struct tcp_options {
 			  TCP_STATE_ACKED ( TCP_SYN | TCP_FIN ) |	    \
 			  TCP_STATE_RCVD ( TCP_SYN ) )
 
-/** CLOSING / LAST_ACK
+/** CLOSING
+ *
+ * For the active close
  *
  * SYN has been sent and acknowledged, SYN has been received, FIN has
  * been sent but not acknowledged, FIN has been received.
- *
- * This state actually encompasses both CLOSING and LAST_ACK; they are
- * identical with the definition of state that we use.  I don't
- * *believe* that they need to be distinguished.
  */
-#define TCP_CLOSING_OR_LAST_ACK						    \
+#define TCP_CLOSING							    \
 			( TCP_STATE_SENT ( TCP_SYN | TCP_ACK | TCP_FIN ) |  \
 			  TCP_STATE_ACKED ( TCP_SYN ) |			    \
 			  TCP_STATE_RCVD ( TCP_SYN | TCP_FIN ) )
+
+/** LAST_ACK
+ *
+ * For the passive close
+ *
+ * SYN has been sent and acknowledged, SYN has been received, FIN has
+ * been sent but not acknowledged, FIN has been received.
+ */
+#define TCP_LAST_ACK						    \
+			( TCP_STATE_SENT ( TCP_SYN | TCP_ACK | TCP_FIN ) |  \
+			  TCP_STATE_ACKED ( TCP_SYN ) |			    \
+			  TCP_STATE_RCVD ( TCP_SYN | TCP_FIN ) |	    \
+			  TCP_PASV_CLOSE )
 
 /** TIME_WAIT
  *
@@ -210,6 +227,17 @@ struct tcp_options {
 			  TCP_STATE_ACKED ( TCP_SYN | TCP_FIN ) |	    \
 			  TCP_STATE_RCVD ( TCP_SYN | TCP_FIN ) )
 
+/** PASV_CLOSED
+ *
+ * SYN has been sent and acknowledged, SYN has been received, FIN has
+ * been sent and acknowledged, FIN has been received.
+ * And was passive close.
+ */
+#define TCP_PASV_CLOSED	( TCP_STATE_SENT ( TCP_SYN | TCP_ACK | TCP_FIN ) |  \
+			  TCP_STATE_ACKED ( TCP_SYN | TCP_FIN ) |	    \
+			  TCP_STATE_RCVD ( TCP_SYN | TCP_FIN ) |	    \
+			  TCP_PASV_CLOSE )
+
 /** CLOSE_WAIT
  *
  * SYN has been sent and acknowledged, SYN has been received, FIN has
@@ -217,7 +245,8 @@ struct tcp_options {
  */
 #define TCP_CLOSE_WAIT	( TCP_STATE_SENT ( TCP_SYN | TCP_ACK ) |	    \
 			  TCP_STATE_ACKED ( TCP_SYN ) |			    \
-			  TCP_STATE_RCVD ( TCP_SYN | TCP_FIN ) )
+			  TCP_STATE_RCVD ( TCP_SYN | TCP_FIN ) |	    \
+			  TCP_PASV_CLOSE )
 
 /** Can send data in current state
  *
