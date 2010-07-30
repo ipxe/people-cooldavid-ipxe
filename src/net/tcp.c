@@ -298,52 +298,63 @@ static int tcp_open ( struct interface *xfer, struct sockaddr *peer,
 }
 
 /**
- * Close TCP connection
+ * Close data transfer interface
  *
  * @v tcp		TCP connection
  * @v rc		Reason for close
  *
- * Closes the data transfer interface.  If the TCP state machine is in
- * a suitable state, the connection will be deleted.
+ * Closes the data transfer interface.
  */
-static void tcp_close ( struct tcp_connection *tcp, int rc ) {
+static void tcp_dataxfer_close ( struct tcp_connection *tcp, int rc ) {
+	intf_shutdown ( &tcp->xfer, rc );
+	tcp->flags |= TCP_XFER_CLOSED;
+}
+
+/**
+ * Terminate TCP connection and free all resources
+ *
+ * @v tcp		TCP connection
+ * @v rc		Reason for close
+ *
+ * Closes the data transfer interface, and free all resources of current TCP
+ * connection.
+ */
+static void tcp_terminate ( struct tcp_connection *tcp, int rc ) {
 	struct io_buffer *iobuf;
 	struct io_buffer *tmp;
 
 	/* Close data transfer interface */
-	intf_shutdown ( &tcp->xfer, rc );
-	tcp->flags |= TCP_XFER_CLOSED;
+	tcp_dataxfer_close(tcp, rc);
 
-	/* If we are in CLOSED, or have otherwise not yet received a
-	 * SYN (i.e. we are in LISTEN or SYN_SENT), just delete the
-	 * connection.
-	 */
-	if ( ! ( tcp->tcp_state & TCP_STATE_RCVD ( TCP_SYN ) ) ) {
+	/* Transition to CLOSED for the sake of debugging messages */
+	tcp->tcp_state = TCP_CLOSED;
+	tcp_dump_state ( tcp );
 
-		/* Transition to CLOSED for the sake of debugging messages */
-		tcp->tcp_state = TCP_CLOSED;
-		tcp_dump_state ( tcp );
-
-		/* Free any unprocessed I/O buffers */
-		list_for_each_entry_safe ( iobuf, tmp, &tcp->rx_queue, list ) {
-			list_del ( &iobuf->list );
-			free_iob ( iobuf );
-		}
-
-		/* Free any unsent I/O buffers */
-		list_for_each_entry_safe ( iobuf, tmp, &tcp->tx_queue, list ) {
-			list_del ( &iobuf->list );
-			free_iob ( iobuf );
-		}
-
-		/* Remove from list and drop reference */
-		stop_timer ( &tcp->timer );
-		list_del ( &tcp->list );
-		ref_put ( &tcp->refcnt );
-		DBGC ( tcp, "TCP %p connection deleted\n", tcp );
-		return;
+	/* Free any unprocessed I/O buffers */
+	list_for_each_entry_safe ( iobuf, tmp, &tcp->rx_queue, list ) {
+		list_del ( &iobuf->list );
+		free_iob ( iobuf );
 	}
 
+	/* Free any unsent I/O buffers */
+	list_for_each_entry_safe ( iobuf, tmp, &tcp->tx_queue, list ) {
+		list_del ( &iobuf->list );
+		free_iob ( iobuf );
+	}
+
+	/* Remove from list and drop reference */
+	stop_timer ( &tcp->timer );
+	list_del ( &tcp->list );
+	ref_put ( &tcp->refcnt );
+	DBGC ( tcp, "TCP %p connection deleted\n", tcp );
+}
+
+/**
+ * Bring TCP connection to closing state
+ *
+ * @v tcp		TCP connection
+ */
+static void tcp_close ( struct tcp_connection *tcp ) {
 	/* If we have not had our SYN acknowledged (i.e. we are in
 	 * SYN_RCVD), pretend that it has been acknowledged so that we
 	 * can send a FIN without breaking things.
@@ -586,9 +597,7 @@ static void tcp_expired ( struct retry_timer *timer, int over ) {
 		/* If we have finally timed out and given up,
 		 * terminate the connection
 		 */
-		tcp->tcp_state = TCP_CLOSED;
-		tcp_dump_state ( tcp );
-		tcp_close ( tcp, -ETIMEDOUT );
+		tcp_terminate ( tcp, -ETIMEDOUT );
 	} else {
 		/* Otherwise, retransmit the packet */
 		tcp_xmit ( tcp );
@@ -611,9 +620,7 @@ static void tcp_wait_expired ( struct retry_timer *timer, int over __unused ) {
 	       tcp_state ( tcp->tcp_state ), tcp->snd_seq,
 	       ( tcp->snd_seq + tcp->snd_sent ), tcp->rcv_ack );
 
-	tcp->tcp_state = TCP_CLOSED;
-	tcp_dump_state ( tcp );
-	tcp_close ( tcp, 0 );
+	tcp_terminate ( tcp, 0 );
 }
 
 /**
@@ -910,6 +917,9 @@ static int tcp_rx_fin ( struct tcp_connection *tcp, uint32_t seq ) {
 		DBGC ( tcp, "TCP %p passive closing.\n", tcp );
 	}
 
+	/* Bring TCP connection to closing state */
+	tcp_close ( tcp );
+
 	return 0;
 }
 
@@ -936,9 +946,7 @@ static int tcp_rx_rst ( struct tcp_connection *tcp, uint32_t seq ) {
 	}
 
 	/* Abort connection */
-	tcp->tcp_state = TCP_CLOSED;
-	tcp_dump_state ( tcp );
-	tcp_close ( tcp, -ECONNRESET );
+	tcp_terminate ( tcp, -ECONNRESET );
 
 	DBGC ( tcp, "TCP %p connection reset by peer\n", tcp );
 	return -ECONNRESET;
@@ -1047,11 +1055,6 @@ static void tcp_process_rx_queue ( struct tcp_connection *tcp ) {
 			       tcp, ( seq - len - ( flags & TCP_FIN ) ? 1 : 0 ),
 			       seq, strerror ( rc ) );
 		}
-	}
-
-	if ( tcp->tcp_state & TCP_STATE_RCVD ( TCP_FIN ) ) {
-		/* Close connection */
-		tcp_close ( tcp, 0 );
 	}
 }
 
@@ -1187,9 +1190,7 @@ static int tcp_rx ( struct io_buffer *iobuf,
 	 *	Set up timer to expire and cause the connection to be freed.
 	 */
 	if ( tcp->tcp_state == TCP_PASV_CLOSED ) {
-		tcp->tcp_state = TCP_CLOSED;
-		tcp_dump_state ( tcp );
-		tcp_close ( tcp, 0 );
+		tcp_terminate ( tcp, 0 );
 	} else if ( TCP_CLOSED_GRACEFULLY ( tcp->tcp_state ) ) {
 		stop_timer ( &tcp->wait );
 		start_timer_fixed ( &tcp->wait, ( 2 * TCP_MSL ) );
@@ -1254,7 +1255,10 @@ struct cache_discarder tcp_cache_discarder __cache_discarder = {
 static void tcp_xfer_close ( struct tcp_connection *tcp, int rc ) {
 
 	/* Close data transfer interface */
-	tcp_close ( tcp, rc );
+	tcp_dataxfer_close ( tcp, rc );
+
+	/* Bring TCP connection to closing state */
+	tcp_close ( tcp );
 
 	/* Transmit FIN, if possible */
 	tcp_xmit ( tcp );
